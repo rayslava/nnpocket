@@ -1,0 +1,6 @@
+* nnpocket
+  An attempt to create a GNUS backend for https://getpocket.com service.
+* Status
+  Initial commit, combined from nnttrss and nndir from example
+* APIs
+  Main page of Pocket docs is at https://getpocket.com/developer/docs
