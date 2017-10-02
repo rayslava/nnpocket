@@ -178,11 +178,11 @@
 		      (alist-get 'resolved_title article)
 		      (url-host (url-generic-parse-url (alist-get 'given_url article)))
 		      (format-time-string "%a, %d %b %Y %T %z"
-					  (seconds-to-time (string-to-number (alist-get 'time_updated article)))))
-	      (let ((start (point)))
-		(insert (alist-get 'excerpt article))
-		(w3m-region start (point)))))
-    (cons article buffer)))
+					  (seconds-to-time (string-to-number (alist-get 'time_updated article))))))
+      (let ((start (point)))
+	(insert (alist-get 'excerpt article))
+	(w3m-region start (point)))))
+    (cons article buffer))
 
 (deffoo nnpocket-close-group (group &optional server)
   t)
