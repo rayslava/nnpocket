@@ -29,7 +29,6 @@
 (require 'nnmh)
 (require 'nnml)
 (require 'nnoo)
-(require 'oauth2)
 (require 'json)
 (require 'web)
 (require 's)
@@ -37,7 +36,6 @@
 
 (nnoo-declare nnpocket)
 (nnoo-define-basics nnpocket)
-
 (gnus-declare-backend "nnpocket" 'news 'address)
 
 (defvoo nnpocket-directory nil
@@ -48,7 +46,7 @@
   "*Non-nil means that nnpocket will never retrieve NOV headers."
   nnml-nov-is-evil)
 
-(defvoo nnpocket-directory (nnheader-concat gnus-directory "ttrss/")
+(defvoo nnpocket-directory (nnheader-concat gnus-directory "nnpocket/")
   "Where nnpocket will save its files.")
 
 (defvoo nnpocket-fetch-partial-articles nil
@@ -180,10 +178,10 @@
 		      (alist-get 'resolved_title article)
 		      (url-host (url-generic-parse-url (alist-get 'given_url article)))
 		      (format-time-string "%a, %d %b %Y %T %z"
-					  (seconds-to-time (string-to-number (alist-get 'time_updated article))))
-		      (let ((start (point)))
-			(insert (alist-get 'excerpt article))
-			(w3m-region start (point))))))
+					  (seconds-to-time (string-to-number (alist-get 'time_updated article)))))
+	      (let ((start (point)))
+		(insert (alist-get 'excerpt article))
+		(w3m-region start (point)))))
     (cons article buffer)))
 
 (deffoo nnpocket-close-group (group &optional server)
@@ -215,9 +213,6 @@
 	      (apply 'max article-id-nums)
 	      (nnimap-encode-gnus-group group)))))
 
-(deffoo nnpocket-close-group (group &optional server)
-  t)
-
 (deffoo nnpocket-request-list (&optional server)
   (nnpocket-open-server "pocket")
   (when (eql nnpocket--article-map nil)
@@ -232,7 +227,7 @@
 			  "pocket"
 			  (apply 'max article-id-nums)
 			  (apply 'min article-id-nums)))
-	(insert (format "\"%s\" 0 1 y\n" title))))
+	(insert (format "\"%s\" 0 1 y\n" "pocket"))))
     t))
 
 (defvar nnpocket--sid nil
