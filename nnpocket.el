@@ -68,11 +68,11 @@
 
 (defconst consumer-key "70702-7b3f302ffbab1b8e1e7410a9" "OAuth consumer key token")
 
-(defvar access-code "" "OAuth access code")
+(defvar nnpocket--access-code "" "OAuth access code")
 
-(defvar access-token "" "OAuth access token")
+(defvar nnpocket--access-token "" "OAuth access token")
 
-(defvar articles nil)
+(defvar nnpocket--article-map nil "List of downloaded articles")
 
 (defun pocket-request-access-code ()
   (let ((query-data (make-hash-table :test 'equal)))
@@ -80,28 +80,26 @@
     (puthash 'redirect_uri "nnpocket:authorizationFinished" query-data)
     (web-http-post
      (lambda (con header data)
-       (setf access-code (s-chop-prefix "code=" data)))
+       (setf nnpocket--access-code (s-chop-prefix "code=" data)))
      :url (concat api-server request-endpoint)
      :data query-data)))
 
-(defun pocket-request-access-token ()
+(defun pocket-request-nnpocket--access-token ()
   (let ((query-data (make-hash-table :test 'equal)))
-    (puthash 'code access-code query-data)
+    (puthash 'code nnpocket--access-code query-data)
     (puthash 'consumer_key consumer-key query-data)
     (web-http-post
      (lambda (con header data)
-       (setf access-token (s-chop-prefix "access_token="
+       (setf nnpocket--access-token (s-chop-prefix "access_token="
 					 (car (s-split "&" data))))
        (message "Received data: %s" data))
      :url (concat api-server authorize-endpoint)
      :data query-data)))
 
-(pocket-login)
-
 ;;; Login sequence
 (defun pocket-login ()
-  ;; Get `access-code'
-  (pocket-request-access-code)
+  ;; Get `nnpocket--access-code'
+  (pocket-request-nnpocket--access-code)
   ;; Start listener proects sfor oauth
   (make-network-process :name "pocket-auth-server"
 			:buffer "*pocket-auth-server*"
@@ -113,15 +111,15 @@
 
   ;; Get user approval
   (browse-url (concat "https://getpocket.com/auth/authorize" authorize-endpoint
-		      "?request_token=" access-code
+		      "?request_token=" nnpocket--access-code
 		      "&redirect_uri=" (url-hexify-string "http://localhost:22334/"))))
 
 
 (defun pocket-auth-filter (proc chunk)
   (process-send-string proc "HTTP/1.1 200 OK\nContent-Type: text/html; charset=UTF-8\n\nAuthentication succeeded")
   (process-send-eof proc)
-  ;; Get `access-token'
-  (pocket-request-access-token)
+  ;; Get `nnpocket--access-token'
+  (pocket-request-nnpocket--access-token)
   (delete-process "pocket-auth-server"))
 
 (defun pocket-auth-sentinel (proc msg)
@@ -141,33 +139,101 @@
 (defun pocket-get-list ()
   (let ((query-data (make-hash-table :test 'equal)))
     (puthash 'consumer_key consumer-key query-data)
-    (puthash 'access_token access-token query-data)
-    (puthash 'count "3" query-data)
+    (puthash 'access_token nnpocket--access-token query-data)
+    (puthash 'count "5" query-data)
     (puthash 'detailType "single" query-data)
     (web-http-post
      (lambda (con header data)
-       (setf articles data))
+       (setf nnpocket--article-map
+	     (alist-get 'list (json-read-from-string articles))))
      :url (concat api-server "/get")
      :data query-data)))
 
-(pocket-get-list)
-
-(defun nnpocket-retrieve-headers (articles &optional group server fetch-old)
+(deffoo nnpocket-retrieve-headers (articles &optional group server fetch-old)
   "Read list of articles"
-  (pocket-get-list)
-  (let ((arts (json-read-from-string articles)))
+  (let* ((headers nnpocket--article-map))
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
-      (dolist (article articles)
-	(insert (nnpocket--format-header article group))))
-    'nov)
-  )
+      (dolist (header headers)
+	(insert
+	 (format "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%S\n"
+		 (car header)
+		 (alist-get 'resolved_title (cdr header))
+		 (url-host (url-generic-parse-url (alist-get 'given_url (cdr header))))
+		 (format-time-string "%a, %d %b %Y %T %z"
+				     (seconds-to-time (string-to-number (alist-get 'time_updated (cdr header)))))
+		 (format "<%s@%s.nnttrss>" (alist-get 'item_id (cdr header)) "nnpocket")
+		""
+		-1
+		-1
+		""
+		nil))))
+    'nov))
 
-(print (json-read-from-string articles))
+(deffoo nnpocket-request-article (article &optional group server to-buffer)
+  (let ((destination (or to-buffer nntp-server-buffer))
+	(article (alist-get (intern (number-to-string article)) nnpocket--article-map)))
+    (with-current-buffer destination
+      (erase-buffer)
+      (insert (format "Newgroups: %s\nSubject: %s\nFrom: %s\nDate: %s\n\n"
+		      "Pocket"
+		      (alist-get 'resolved_title article)
+		      (url-host (url-generic-parse-url (alist-get 'given_url article)))
+		      (format-time-string "%a, %d %b %Y %T %z"
+					  (seconds-to-time (string-to-number (alist-get 'time_updated article))))
+		      (let ((start (point)))
+			(insert (alist-get 'excerpt article))
+			(w3m-region start (point))))))
+    (cons article buffer)))
 
-(deffoo nnttrss-retrieve-headers (articles &optional group server fetch-old)
+(deffoo nnpocket-close-group (group &optional server)
+  t)
 
-(nnpocket-retrieve-headers 5)
+(deffoo nnpocket-open-server (server &optional defs)
+  (if (nnpocket-server-opened server)
+      t
+    (pocket-login)))
+
+(deffoo nnpocket-server-opened (&optional server)
+  (not (string-empty-p nnpocket--access-token)))
+
+(deffoo nnpocket-request-close ()
+  t)
+
+(deffoo nnpocket-request-group (group &optional server fast info)
+  (when (eql nnpocket--article-map nil)
+    (pocket-get-list))
+  (if fast
+      t
+    (let* ((id 1)
+	   (article-ids (mapcar 'car nnpocket--article-map))
+	   (article-id-nums (mapcar (lambda (e) (string-to-number (symbol-name e))) article-ids))
+	   (total-articles (length nnpocket--article-map)))
+      (format "211 %d %d %d \"%s\"\n"
+	      total-articles
+	      (apply 'min article-id-nums)
+	      (apply 'max article-id-nums)
+	      (nnimap-encode-gnus-group group)))))
+
+(deffoo nnpocket-close-group (group &optional server)
+  t)
+
+(deffoo nnpocket-request-list (&optional server)
+  (nnpocket-open-server "pocket")
+  (when (eql articles nil)
+    (pocket-get-list))
+  (with-current-buffer nntp-server-buffer
+    (erase-buffer)
+    (let*  ((article-ids (mapcar 'car nnpocket--article-map))
+	    (article-id-nums (mapcar (lambda (e) (string-to-number (symbol-name e))) article-ids))
+	    (total-articles (length nnpocket--article-map)))
+      (if article-ids
+	  (insert (format "\"%s\" %d %d y\n"
+			  "pocket"
+			  (apply 'max article-id-nums)
+			  (apply 'min article-id-nums)))
+	(insert (format "\"%s\" 0 1 y\n" title))))
+    t))
 
 (defvar nnpocket--sid nil
   "Current session id, if any, set after successful login.")
@@ -189,37 +255,6 @@
 
 (defvar nnpocket--feeds nil
   "List of all feed property lists.")
-
-;;; Interface functions.
-
-(nnoo-define-basics nnpocket)
-
-(deffoo nnpocket-open-server (server &optional defs)
-  (setq nnpocket-directory
-	(or (cadr (assq 'nnpocket-directory defs))
-	    server))
-  (unless (assq 'nnpocket-directory defs)
-    (push `(nnpocket-directory ,server) defs))
-  (push `(nnpocket-current-group
-	  ,(file-name-nondirectory
-	    (directory-file-name nnpocket-directory)))
-	defs)
-  (push `(nnpocket-top-directory
-	  ,(file-name-directory (directory-file-name nnpocket-directory)))
-	defs)
-  (nnoo-change-server 'nnpocket server defs))
-
-(nnoo-map-functions nnpocket
-  (nnpocket-retrieve-headers 0 nnpocket-current-group 0 0)
-  (nnmh-request-article 0 nnpocket-current-group 0 0)
-  (nnmh-request-group nnpocket-current-group 0 0)
-  (nnmh-close-group nnpocket-current-group 0))
-
-(nnoo-import nnpocket
-  (nnmh
-   nnmh-status-message
-   nnmh-request-list
-   nnmh-request-newgroups))
 
 (provide 'nnpocket)
 ;;; nnpocket.el ends here
