@@ -145,7 +145,7 @@
     (web-http-post
      (lambda (con header data)
        (setf nnpocket--article-map
-	     (alist-get 'list (json-read-from-string articles))))
+	     (alist-get 'list (json-read-from-string data))))
      :url (concat api-server "/get")
      :data query-data)))
 
@@ -220,7 +220,7 @@
 
 (deffoo nnpocket-request-list (&optional server)
   (nnpocket-open-server "pocket")
-  (when (eql articles nil)
+  (when (eql nnpocket--article-map nil)
     (pocket-get-list))
   (with-current-buffer nntp-server-buffer
     (erase-buffer)
