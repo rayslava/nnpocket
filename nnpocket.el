@@ -72,7 +72,7 @@
 
 (defvar nnpocket--article-map nil "List of downloaded articles")
 
-(defun pocket-request-access-code ()
+(defun pocket-request-nnpocket--access-code ()
   (let ((query-data (make-hash-table :test 'equal)))
     (puthash 'consumer_key consumer-key query-data)
     (puthash 'redirect_uri "nnpocket:authorizationFinished" query-data)
