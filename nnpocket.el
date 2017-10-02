@@ -42,10 +42,6 @@
   "Where nnpocket will look for groups."
   nnml-current-directory nnmh-current-directory)
 
-(defvoo nnpocket-nov-is-evil nil
-  "*Non-nil means that nnpocket will never retrieve NOV headers."
-  nnml-nov-is-evil)
-
 (defvoo nnpocket-directory (nnheader-concat gnus-directory "nnpocket/")
   "Where nnpocket will save its files.")
 
@@ -71,6 +67,12 @@
 (defvar nnpocket--access-token "" "OAuth access token")
 
 (defvar nnpocket--article-map nil "List of downloaded articles")
+
+(defun parse-articles (json)
+  "Parse `json' answer from Pocket server and create appropriate `nnpocket--article-map'"
+  (let ((articles (alist-get 'list (json-read-from-string data))))
+    (sort articles #'car)
+    (setf nnpocket--article-map articles)))
 
 (defun pocket-request-nnpocket--access-code ()
   (let ((query-data (make-hash-table :test 'equal)))
@@ -138,12 +140,11 @@
   (let ((query-data (make-hash-table :test 'equal)))
     (puthash 'consumer_key consumer-key query-data)
     (puthash 'access_token nnpocket--access-token query-data)
-    (puthash 'count "5" query-data)
+    (puthash 'count "10" query-data)
     (puthash 'detailType "single" query-data)
     (web-http-post
      (lambda (con header data)
-       (setf nnpocket--article-map
-	     (alist-get 'list (json-read-from-string data))))
+       (parse-articles data))
      :url (concat api-server "/get")
      :data query-data)))
 
@@ -203,15 +204,14 @@
     (pocket-get-list))
   (if fast
       t
-    (let* ((id 1)
-	   (article-ids (mapcar 'car nnpocket--article-map))
+    (let* ((article-ids (mapcar 'car nnpocket--article-map))
 	   (article-id-nums (mapcar (lambda (e) (string-to-number (symbol-name e))) article-ids))
 	   (total-articles (length nnpocket--article-map)))
-      (format "211 %d %d %d \"%s\"\n"
-	      total-articles
-	      (apply 'min article-id-nums)
-	      (apply 'max article-id-nums)
-	      (nnimap-encode-gnus-group group)))))
+      (insert (format "211 %d %d %d \"%s\"\n"
+	       total-articles
+	       (apply 'min article-id-nums)
+	       (apply 'max article-id-nums)
+	       (nnimap-encode-gnus-group group))))))
 
 (deffoo nnpocket-request-list (&optional server)
   (nnpocket-open-server "pocket")
