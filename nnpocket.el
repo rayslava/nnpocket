@@ -68,6 +68,12 @@
 
 (defvar nnpocket--article-map nil "List of downloaded articles")
 
+(defun nnpocket-decode-gnus-group (group)
+  (decode-coding-string group 'utf-8))
+
+(defun nnpocket-encode-gnus-group (group)
+  (encode-coding-string group 'utf-8))
+
 (defun parse-articles (json)
   "Parse `json' answer from Pocket server and create appropriate `nnpocket--article-map'"
   (let ((articles (alist-get 'list (json-read-from-string json))))
@@ -150,6 +156,8 @@
 
 (deffoo nnpocket-retrieve-headers (articles &optional group server fetch-old)
   "Read list of articles"
+  (when group
+    (setq group (nnpocket-decode-gnus-group group)))
   (let* ((headers nnpocket--article-map))
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
@@ -170,6 +178,8 @@
     'nov))
 
 (deffoo nnpocket-request-article (article &optional group server to-buffer)
+  (when group
+    (setq group (nnpocket-decode-gnus-group group)))
   (let ((destination (or to-buffer nntp-server-buffer))
 	(article (alist-get (intern (number-to-string article)) nnpocket--article-map)))
     (with-current-buffer destination
@@ -200,6 +210,7 @@
   t)
 
 (deffoo nnpocket-request-group (group &optional server fast info)
+  (setq group (nnpocket-decode-gnus-group group))
   (when (eql nnpocket--article-map nil)
     (pocket-get-list))
   (if fast
@@ -211,7 +222,7 @@
 	       total-articles
 	       (apply 'min article-id-nums)
 	       (apply 'max article-id-nums)
-	       group)))))
+	       (nnpocket-encode-gnus-group group))))))
 
 (deffoo nnpocket-request-list (&optional server)
   (nnpocket-open-server "pocket")
@@ -220,8 +231,7 @@
   (with-current-buffer nntp-server-buffer
     (erase-buffer)
     (let*  ((article-ids (mapcar 'car nnpocket--article-map))
-	    (article-id-nums (mapcar (lambda (e) (string-to-number (symbol-name e))) article-ids))
-	    (total-articles (length nnpocket--article-map)))
+	    (article-id-nums (mapcar (lambda (e) (string-to-number (symbol-name e))) article-ids)))
       (if article-ids
 	  (insert (format "\"%s\" %d %d y\n"
 			  "pocket"
