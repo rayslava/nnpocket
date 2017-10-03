@@ -211,7 +211,7 @@
 	       total-articles
 	       (apply 'min article-id-nums)
 	       (apply 'max article-id-nums)
-	       (nnimap-encode-gnus-group group))))))
+	       group)))))
 
 (deffoo nnpocket-request-list (&optional server)
   (nnpocket-open-server "pocket")
