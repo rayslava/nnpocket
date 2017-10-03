@@ -70,8 +70,8 @@
 
 (defun parse-articles (json)
   "Parse `json' answer from Pocket server and create appropriate `nnpocket--article-map'"
-  (let ((articles (alist-get 'list (json-read-from-string data))))
-    (sort articles #'car)
+  (let ((articles (alist-get 'list (json-read-from-string json))))
+    (message json)
     (setf nnpocket--article-map articles)))
 
 (defun pocket-request-nnpocket--access-code ()
