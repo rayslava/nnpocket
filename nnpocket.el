@@ -26,9 +26,11 @@
 ;;; Code:
 
 (require 'nnheader)
+(require 'gnus)
 (require 'nnmh)
 (require 'nnml)
 (require 'nnoo)
+(require 'nnrss)
 (require 'json)
 (require 'web)
 (require 's)
@@ -66,7 +68,16 @@
 
 (defvar nnpocket--access-token "" "OAuth access token")
 
-(defvar nnpocket--article-map nil "List of downloaded articles")
+(defvar nnpocket--headlines nil "List of downloaded articles")
+
+(defvar nnttrss--article-map nil
+  "Property list of association lists.
+The properties are group name strings.  Values are association
+lists of Pocket IDs  to article numbers.")
+
+(defvar nnpocket--id-map nil "Property list of GNUS ids vs Pocket ids")
+
+(defvar nnttrss--last-article-id 0 "Pocket ID of last article nnpocket knows about.")
 
 (defun nnpocket-decode-gnus-group (group)
   (decode-coding-string group 'utf-8))
@@ -75,10 +86,10 @@
   (encode-coding-string group 'utf-8))
 
 (defun parse-articles (json)
-  "Parse `json' answer from Pocket server and create appropriate `nnpocket--article-map'"
+  "Parse `json' answer from Pocket server and create appropriate `nnpocket--headlines'"
   (let ((articles (alist-get 'list (json-read-from-string json))))
-    (message json)
-    (setf nnpocket--article-map articles)))
+    (setf nnpocket--headlines articles)
+    (nnpocket--update-article-map)))
 
 (defun pocket-request-nnpocket--access-code ()
   (let ((query-data (make-hash-table :test 'equal)))
@@ -97,7 +108,7 @@
     (web-http-post
      (lambda (con header data)
        (setf nnpocket--access-token (s-chop-prefix "access_token="
-					 (car (s-split "&" data))))
+						   (car (s-split "&" data))))
        (message "Received data: %s" data))
      :url (concat api-server authorize-endpoint)
      :data query-data)))
@@ -146,7 +157,7 @@
   (let ((query-data (make-hash-table :test 'equal)))
     (puthash 'consumer_key consumer-key query-data)
     (puthash 'access_token nnpocket--access-token query-data)
-    (puthash 'count "10" query-data)
+    (puthash 'count "20" query-data)
     (puthash 'detailType "single" query-data)
     (web-http-post
      (lambda (con header data)
@@ -158,42 +169,46 @@
   "Read list of articles"
   (when group
     (setq group (nnpocket-decode-gnus-group group)))
-  (let* ((headers nnpocket--article-map))
-    (with-current-buffer nntp-server-buffer
-      (erase-buffer)
-      (dolist (header headers)
+  (with-current-buffer nntp-server-buffer
+    (erase-buffer)
+    (dolist (article articles)
+      (let* ((articles (lax-plist-get nnpocket--article-map group))
+	     (pocket-id (car (rassoc article articles)))
+	     (header (alist-get (intern (number-to-string pocket-id)) nnpocket--headlines)))
 	(insert
 	 (format "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%S\n"
-		 (car header)
+		 article
 		 (alist-get 'resolved_title (cdr header))
 		 (url-host (url-generic-parse-url (alist-get 'given_url (cdr header))))
 		 (format-time-string "%a, %d %b %Y %T %z"
 				     (seconds-to-time (string-to-number (alist-get 'time_updated (cdr header)))))
 		 (format "<%s@%s.nnttrss>" (alist-get 'item_id (cdr header)) "nnpocket")
-		""
-		-1
-		-1
-		""
-		nil))))
+		 ""
+		 -1
+		 -1
+		 ""
+		 nil))))
     'nov))
 
 (deffoo nnpocket-request-article (article &optional group server to-buffer)
   (when group
     (setq group (nnpocket-decode-gnus-group group)))
-  (let ((destination (or to-buffer nntp-server-buffer))
-	(article (alist-get (intern (number-to-string article)) nnpocket--article-map)))
-    (with-current-buffer destination
-      (erase-buffer)
-      (insert (format "Newgroups: %s\nSubject: %s\nFrom: %s\nDate: %s\n\n"
-		      "Pocket"
-		      (alist-get 'resolved_title article)
-		      (url-host (url-generic-parse-url (alist-get 'given_url article)))
-		      (format-time-string "%a, %d %b %Y %T %z"
-					  (seconds-to-time (string-to-number (alist-get 'time_updated article))))))
-      (let ((start (point)))
-	(insert (alist-get 'excerpt article))
-	(w3m-region start (point)))))
-    (cons article buffer))
+  (let* ((destination (or to-buffer nntp-server-buffer))
+	 (articles (lax-plist-get nnpocket--article-map group))
+	 (pocket-id (car (rassoc article articles))))
+    (let ((article (alist-get (intern (number-to-string pocket-id)) nnpocket--headlines)))
+      (with-current-buffer destination
+	(erase-buffer)
+	(insert (format "Newgroups: %s\nSubject: %s\nFrom: %s\nDate: %s\n\n"
+			"Pocket"
+			(alist-get 'resolved_title article)
+			(url-host (url-generic-parse-url (alist-get 'given_url article)))
+			(format-time-string "%a, %d %b %Y %T %z"
+					    (seconds-to-time (string-to-number (alist-get 'time_updated article))))))
+	(let ((start (point)))
+	  (insert (alist-get 'excerpt article))
+	  (w3m-region start (point))))))
+  (cons article buffer))
 
 (deffoo nnpocket-close-group (group &optional server)
   t)
@@ -201,7 +216,10 @@
 (deffoo nnpocket-open-server (server &optional defs)
   (if (nnpocket-server-opened server)
       t
-    (pocket-login)))
+    (when (not nnpocket--access-code)
+      (pocket-login))
+    (nnpocket--read-headlines)
+    (nnpocket--read-article-map)))
 
 (deffoo nnpocket-server-opened (&optional server)
   (not (string-empty-p nnpocket--access-token)))
@@ -211,55 +229,120 @@
 
 (deffoo nnpocket-request-group (group &optional server fast info)
   (setq group (nnpocket-decode-gnus-group group))
-  (when (eql nnpocket--article-map nil)
+  (when (eql nnpocket--headlines nil)
     (pocket-get-list))
+  (message "Inserting: %s" fast)
   (if fast
       t
-    (let* ((article-ids (mapcar 'car nnpocket--article-map))
-	   (article-id-nums (mapcar (lambda (e) (string-to-number (symbol-name e))) article-ids))
-	   (total-articles (length nnpocket--article-map)))
-      (insert (format "211 %d %d %d \"%s\"\n"
-	       total-articles
-	       (apply 'min article-id-nums)
-	       (apply 'max article-id-nums)
-	       (nnpocket-encode-gnus-group group))))))
+    (with-current-buffer nntp-server-buffer
+      (let* ((article-ids (mapcar #'cdr (lax-plist-get nnpocket--article-map group)))
+	     (total-articles (length article-ids)))
+	(erase-buffer)
+	(insert (format "211 %d %d %d \"%s\"\n"
+			total-articles
+			(apply 'min article-ids)
+			(apply 'max article-ids)
+			(nnpocket-encode-gnus-group group)))
+	t))))
 
 (deffoo nnpocket-request-list (&optional server)
-  (nnpocket-open-server "pocket")
-  (when (eql nnpocket--article-map nil)
-    (pocket-get-list))
   (with-current-buffer nntp-server-buffer
     (erase-buffer)
-    (let*  ((article-ids (mapcar 'car nnpocket--article-map))
-	    (article-id-nums (mapcar (lambda (e) (string-to-number (symbol-name e))) article-ids)))
+    (let*  ((article-ids (mapcar #'cdr (lax-plist-get nnpocket--article-map "pocket"))))
       (if article-ids
 	  (insert (format "\"%s\" %d %d y\n"
 			  "pocket"
-			  (apply 'max article-id-nums)
-			  (apply 'min article-id-nums)))
+			  (apply 'max article-ids)
+			  (apply 'min article-ids)))
 	(insert (format "\"%s\" 0 1 y\n" "pocket"))))
     t))
 
-(defvar nnpocket--sid nil
-  "Current session id, if any, set after successful login.")
+(defun nnpocket--update-single-article-map (article-id group)
+  "Add ARTICLE-ID in GROUP to 'nnpocket--article-map'."
+  (if (not (lax-plist-get nnpocket--article-map group))
+      (setq nnpocket--article-map
+	    (lax-plist-put nnpocket--article-map group `((,article-id . 1))))
+    (let ((mapping (lax-plist-get nnpocket--article-map group)))
+      (unless (assoc article-id mapping)
+	(let* ((last-artno (cdar mapping))
+	       (next-artno (+ 1 (or last-artno 0)))
+	       (mapping (cons `(,article-id . ,next-artno) mapping)))
+	  (setq nnpocket--article-map
+		(lax-plist-put nnpocket--article-map group mapping)))))))
 
-(defvar nnpocket--api-level nil
-  "API version level, increased with each API functionality change.")
+(defun nnpocket--update-article-map ()
+  "Update 'nnpocket--article-map' with new articles in 'nnpocket--headlines'."
+  (dolist (headline (mapcar 'cdr nnpocket--headlines))
+    (let* ((article-id (string-to-number (alist-get 'item_id headline)))
+	   (group "pocket"))
+      (when (> article-id nnpocket--last-article-id)
+	(nnpocket--update-single-article-map article-id group))))
+  (setq nnpocket--last-article-id (apply 'max
+					 (mapcar
+					  (lambda (e)
+					    (string-to-number (symbol-name (car e))))
+					  nnpocket--headlines)))
+  (nnpocket--write-article-map)
+  (nnpocket--write-headlines))
 
-(defvar nnpocket--server-version nil
-  "Server version number.")
+(defun nnpocket--read-vars (&rest vars)
+  "Read VARS from local file in 'nnpocket-directory'.
+Sets the variables VARS'."
+  (dolist (var vars)
+					;(setf (symbol-value var) nil)
+    (let* ((name (symbol-name var))
+	   (file (nnpocket-make-filename name))
+	   (file-name-coding-system nnmail-pathname-coding-system)
+	   (coding-system-for-read mm-universal-coding-system))
+      (when (file-exists-p file)
+	(load file nil t t)))))
 
-(defvar nnpocket--headlines nil
-  "List of all headline propertly lists.")
+(defun nnpocket--write-vars (&rest vars)
+  "Write VARS from memory to local file in 'nnpocket-directory'.
+Assumes the variables VARS are set."
+  (gnus-make-directory nnpocket-directory)
+  (dolist (var vars)
+    (let* ((name (symbol-name var))
+	   (file (nnpocket-make-filename name))
+	   (file-name-coding-system nnmail-pathname-coding-system)
+	   (coding-system-for-write mm-universal-coding-system))
+      (with-temp-file (nnpocket-make-filename name)
+	(insert (format ";; -*- coding: %s; -*-\n"
+			mm-universal-coding-system))
+	(let ((value (symbol-value var)))
+	  (if (listp value)
+	      (gnus-prin1 `(setq ,var ',value))
+	    (gnus-prin1 `(setq ,var ,value))))
+	(insert "\n")))))
 
-(defvar nnpocket--last-article-id 0
-  "Internal server ID of last article nnpocket knows about.")
+(defun nnpocket-make-filename (name)
+  "Build filename based on NAME in 'nnpocket-directory'."
+  (expand-file-name
+   (nnrss-translate-file-chars
+    (concat name ".el"))
+   nnpocket-directory))
 
-(defvar nnpocket--article-map nil
-  "Property list of association lists.")
+(defun nnpocket--read-article-map ()
+  "Read articles mapping file in 'nnpocket-directory'.
+Sets the variables 'nnpocket--headlines and
+'nnpocket--last-article-id'."
+  (nnpocket--read-vars 'nnpocket--article-map 'nnpocket--last-article-id))
 
-(defvar nnpocket--feeds nil
-  "List of all feed property lists.")
+(defun nnpocket--write-article-map ()
+  "Write article map from memory to local file in 'nnpocket-directory'.
+Assumes the variables 'nnpocket--headlines' and
+'nnpocket--last-article-id' are set."
+  (nnpocket--write-vars 'nnpocket--article-map 'nnpocket--last-article-id))
+
+(defun nnpocket--read-headlines ()
+  "Read headlines from local file in 'nnpocket-directory'.
+Sets the variables 'nnpocket--headlines'."
+  (nnpocket--read-vars 'nnpocket--headlines))
+
+(defun nnpocket--write-headlines ()
+  "Write headlines from memory to local file in 'nnpocket-directory'.
+Assumes the variable 'nnpocket--headlines' is set."
+  (nnpocket--write-vars 'nnpocket--headlines))
 
 (provide 'nnpocket)
 ;;; nnpocket.el ends here
