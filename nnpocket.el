@@ -205,8 +205,11 @@ lists of Pocket IDs  to article numbers.")
 			(format-time-string "%a, %d %b %Y %T %z"
 					    (seconds-to-time (string-to-number (alist-get 'time_updated article))))))
 	(let ((start (point)))
-	  (insert (alist-get 'excerpt article))
-	  (w3m-region start (point))))))
+	  (let ((text (alist-get 'excerpt article)))
+	    (if text
+	      (insert text)
+	      (insert "Couldn't retrieve article")))
+	    (w3m-region start (point))))))
   (cons article buffer))
 
 (deffoo nnpocket-close-group (group &optional server)
