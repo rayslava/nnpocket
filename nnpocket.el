@@ -70,14 +70,14 @@
 
 (defvar nnpocket--headlines nil "List of downloaded articles")
 
-(defvar nnttrss--article-map nil
+(defvar nnpocket--article-map nil
   "Property list of association lists.
 The properties are group name strings.  Values are association
 lists of Pocket IDs  to article numbers.")
 
 (defvar nnpocket--id-map nil "Property list of GNUS ids vs Pocket ids")
 
-(defvar nnttrss--last-article-id 0 "Pocket ID of last article nnpocket knows about.")
+(defvar nnpocket--last-article-id 0 "Pocket ID of last article nnpocket knows about.")
 
 (defun nnpocket-decode-gnus-group (group)
   (decode-coding-string group 'utf-8))
@@ -88,7 +88,7 @@ lists of Pocket IDs  to article numbers.")
 (defun parse-articles (json)
   "Parse `json' answer from Pocket server and create appropriate `nnpocket--headlines'"
   (let ((articles (alist-get 'list (json-read-from-string json))))
-    (setf nnpocket--headlines articles)
+    (nnpocket--update-headlines articles)
     (nnpocket--update-article-map)))
 
 (defun pocket-request-nnpocket--access-code ()
@@ -130,7 +130,6 @@ lists of Pocket IDs  to article numbers.")
   (browse-url (concat "https://getpocket.com/auth/authorize" authorize-endpoint
 		      "?request_token=" nnpocket--access-code
 		      "&redirect_uri=" (url-hexify-string "http://localhost:22334/"))))
-
 
 (defun pocket-auth-filter (proc chunk)
   (process-send-string proc "HTTP/1.1 200 OK\nContent-Type: text/html; charset=UTF-8\n\nAuthentication succeeded")
@@ -182,7 +181,7 @@ lists of Pocket IDs  to article numbers.")
 		 (url-host (url-generic-parse-url (alist-get 'given_url (cdr header))))
 		 (format-time-string "%a, %d %b %Y %T %z"
 				     (seconds-to-time (string-to-number (alist-get 'time_updated (cdr header)))))
-		 (format "<%s@%s.nnttrss>" (alist-get 'item_id (cdr header)) "nnpocket")
+		 (format "<%s@%s.nnpocket>" (alist-get 'item_id (cdr header)) "nnpocket")
 		 ""
 		 -1
 		 -1
@@ -284,6 +283,12 @@ lists of Pocket IDs  to article numbers.")
 					  nnpocket--headlines)))
   (nnpocket--write-article-map)
   (nnpocket--write-headlines))
+
+(defun nnpocket--update-headlines (articles)
+  (dolist (new articles)
+    (when (not (assoc (car new) nnpocket--headlines))
+      (setq nnpocket--headlines
+	    (append nnpocket--headlines (list new))))))
 
 (defun nnpocket--read-vars (&rest vars)
   "Read VARS from local file in 'nnpocket-directory'.
